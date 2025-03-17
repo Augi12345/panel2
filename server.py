@@ -1,10 +1,52 @@
 import os
-import time  # Dieser Import fehlte
-import signal
-import sys
+import time
 import platform
+import sys
 import socket
 from datetime import datetime
+import threading
+from flask import Flask, request, jsonify, render_template_string
+
+# Flask App initialisieren
+app = Flask(__name__)
+
+# Globale Variablen
+users = {}
+banned_users = set()
+
+# Basis-Template für das Web-Interface
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Server Management</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #333; }
+        .info { background-color: #f5f5f5; padding: 15px; border-radius: 5px; }
+        .button { padding: 8px 12px; background: #4CAF50; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Server Management System</h1>
+        <div class="info">
+            <p>Server ist aktiv. Systemzeit: {{ current_time }}</p>
+            <p>Benutzer: {{ user_count }}</p>
+        </div>
+        <div>
+            <h2>Login</h2>
+            <form action="/login" method="post">
+                <input type="text" name="username" placeholder="Benutzername"><br>
+                <input type="password" name="password" placeholder="Passwort"><br>
+                <button type="submit" class="button">Anmelden</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
+"""
 
 
 # Funktion zum Laden der Passwörter
@@ -42,47 +84,79 @@ def log_action(action):
         log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {action}\n")
 
 
-# Funktion zum Schreiben von Logs für die Konsole
-def log_to_console(message):
-    print(f"[SERVER] {message}", flush=True)
+# Web-Routes
+
+@app.route('/')
+def home():
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return render_template_string(HTML_TEMPLATE, current_time=current_time, user_count=len(users))
 
 
-# Signal-Handler für sauberes Herunterfahren
-def signal_handler(sig, frame):
-    log_to_console("Server wird beendet...")
-    sys.exit(0)
+@app.route('/login', methods=['POST'])
+def login():
+    username = request.form.get('username')
+    password = request.form.get('password')
+
+    if username in banned_users:
+        return "Dieser Account wurde gesperrt. Kontaktiere den Administrator."
+
+    if username in users and users[username] == password:
+        log_action(f"Anmeldung: {username}")
+        return f"Willkommen, {username}! Login erfolgreich."
+    else:
+        return "Falscher Benutzername oder Passwort."
 
 
-# Globale Variablen
-users = {}
-banned_users = set()
+@app.route('/api/system-info', methods=['GET'])
+def system_info():
+    info = {
+        "system": platform.system(),
+        "version": platform.version(),
+        "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "users": len(users)
+    }
+    return jsonify(info)
+
+
+@app.route('/api/ban-user', methods=['POST'])
+def api_ban_user():
+    auth = request.headers.get('Authorization')
+    if not auth or auth != "Bearer admin-token":  # Einfache Auth - in Produktion besser sichern!
+        return jsonify({"error": "Nicht autorisiert"}), 401
+
+    data = request.json
+    user_to_ban = data.get('username')
+
+    if not user_to_ban:
+        return jsonify({"error": "Benutzername fehlt"}), 400
+
+    banned_users.add(user_to_ban)
+    with open("banned_users.txt", "a") as file:
+        file.write(f"{user_to_ban}\n")
+
+    log_action(f"Benutzer gesperrt: {user_to_ban} via API")
+    return jsonify({"success": True, "message": f"Benutzer {user_to_ban} wurde gesperrt"})
+
+
+# Hintergrund-Thread für Server-Aufgaben
+def background_tasks():
+    while True:
+        # Periodische Aufgaben hier
+        print("Hintergrundprozess ist aktiv")
+        time.sleep(60)
 
 
 # Hauptprogramm
-def main():
-    global users
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    log_to_console("Server wird gestartet...")
-
-    # Lade Benutzer und gesperrte Benutzer
+if __name__ == "__main__":
+    # Lade Konfigurationen
     users = load_passwords()
     load_banned_users()
 
-    log_to_console(f"Server läuft mit {len(users)} Benutzern")
-    log_action("Server gestartet")
+    # Starte Hintergrundprozess
+    bg_thread = threading.Thread(target=background_tasks)
+    bg_thread.daemon = True
+    bg_thread.start()
 
-    # Server am Leben halten
-    try:
-        while True:
-            time.sleep(60)
-            log_to_console("Server ist aktiv")
-    except Exception as e:
-        log_to_console(f"Fehler: {str(e)}")
-        log_action(f"Serverfehler: {str(e)}")
-
-
-if __name__ == "__main__":
-    main()
+    # Starte Web-Server
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
