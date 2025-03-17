@@ -118,3 +118,7 @@ def admin_panel():
 
 if __name__ == "__main__":
     main_menu()
+
+
+def app():
+    return None

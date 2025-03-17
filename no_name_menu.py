@@ -205,3 +205,6 @@ while True:
     else:
         print("\033[91mUngültige Auswahl, bitte erneut versuchen.\033[0m")
     input("Drücke Enter, um fortzufahren...")
+
+def app():
+    return None
